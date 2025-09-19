@@ -91,12 +91,12 @@ if len(uploaded_files) > 0:
         charging_df = filtered_df[filtered_df['normalized_event'].str.contains('Battery Charging', na=False)].copy()
         if not charging_df.empty:
             charging_df['date'] = charging_df['timestamp'].dt.date
-            charging_df['start_time'] = charging_df['timestamp']
-            charging_groups = charging_df.groupby('date').apply(lambda g: g.sort_values('timestamp')).groupby('date').agg({
-                'start_time': lambda x: x.iloc[0],
-                'timestamp': 'max'
+            charging_groups = charging_df.groupby('date').agg({
+                'timestamp': ['min', 'max'],
+                'battery': 'last'
             }).reset_index()
-            charging_groups['duration_hours'] = (charging_groups['timestamp'] - charging_groups['start_time']).dt.total_seconds() / 3600
+            charging_groups.columns = ['date', 'start_time', 'end_time', 'end_battery']
+            charging_groups['duration_hours'] = (charging_groups['end_time'] - charging_groups['start_time']).dt.total_seconds() / 3600
             
             fig1 = go.Figure()
             fig1.add_trace(go.Bar(
@@ -104,7 +104,8 @@ if len(uploaded_files) > 0:
                 y=charging_groups['duration_hours'],
                 name='Charge Duration',
                 marker_color='blue',
-                hovertemplate='<b>Charge Duration</b>: %{y:.1f}h<br>Date: %{x}<extra></extra>'
+                hovertemplate='<b>Charge Duration</b>: %{y:.1f}h<br>Date: %{x}<br>End Battery: %{customdata}%<extra></extra>',
+                customdata=charging_groups['end_battery']
             ))
             
             fig1.update_layout(
@@ -124,7 +125,7 @@ if len(uploaded_files) > 0:
             st.subheader("Summary for Charging Graph")
             st.text("This graph shows the total duration of charging sessions per day (blue bars). It helps identify how long the camera was charged each day, with bars stacking to reflect multiple charge sessions. Longer or frequent charges may suggest battery health concerns.")
         
-        # Graph 2: Power On/Off Bar Chart
+        # Graph 2: Power On/Off Timeline
         st.subheader("Power On/Off Timeline")
         power_df = filtered_df[filtered_df['normalized_event'].str.contains('Power On|Power Off', na=False)].copy()
         if not power_df.empty:
@@ -135,9 +136,10 @@ if len(uploaded_files) > 0:
             fig2 = go.Figure()
             for typ in ['Power On', 'Power Off']:
                 typ_df = power_df[power_df['type'] == typ].groupby('date').agg({'time': 'mean', 'battery': 'mean'}).reset_index()
+                typ_df['time_hours'] = typ_df['time'].apply(lambda t: t.hour + t.minute/60 + t.second/3600)
                 fig2.add_trace(go.Bar(
                     x=typ_df['date'],
-                    y=typ_df['time'].apply(lambda t: t.hour + t.minute/60 + t.second/3600),
+                    y=typ_df['time_hours'],
                     name=typ,
                     marker_color='green' if typ == 'Power On' else 'red',
                     hovertemplate='<b>%{data.name}</b><br>Date: %{x}<br>Avg Time: %{y|%H:%M}<br>Avg Battery: %{customdata:.1f}%<extra></extra>',
@@ -164,7 +166,7 @@ if len(uploaded_files) > 0:
             avg_off_bat = power_df[power_df['type'] == 'Power Off']['battery'].mean()
             st.text(f"Average battery at power on: {avg_on_bat:.1f}% \nAverage battery at power off: {avg_off_bat:.1f}%")
         
-        # Graph 3: Recording Status
+        # Graph 3: Recording Status Timeline
         st.subheader("Recording Status Timeline")
         recording_df = filtered_df[filtered_df['normalized_event'].str.contains('Start Record|Stop Record|Pre-Record', na=False)].copy()
         if not recording_df.empty:
@@ -176,9 +178,10 @@ if len(uploaded_files) > 0:
             fig3 = go.Figure()
             for typ in ['Pre-Record', 'Record']:
                 typ_df = recording_df[recording_df['type'] == typ].groupby('date').agg({'time': 'mean', 'battery': 'mean'}).reset_index()
+                typ_df['time_hours'] = typ_df['time'].apply(lambda t: t.hour + t.minute/60 + t.second/3600)
                 fig3.add_trace(go.Bar(
                     x=typ_df['date'],
-                    y=typ_df['time'].apply(lambda t: t.hour + t.minute/60 + t.second/3600),
+                    y=typ_df['time_hours'],
                     name=typ,
                     marker_color=typ_df['color'],
                     hovertemplate='<b>%{data.name}</b><br>Date: %{x}<br>Avg Time: %{y|%H:%M}<br>Avg Battery: %{customdata:.1f}%<extra></extra>',
