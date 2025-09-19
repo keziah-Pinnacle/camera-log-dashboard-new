@@ -106,14 +106,15 @@ if len(uploaded_files) > 0:
             fig1 = go.Figure()
             for session in charging_groups['session'].unique():
                 session_df = charging_groups[charging_groups['session'] == session]
-                is_resumed = session > 0
+                is_resumed = session > 0  # Check if this is a resumed session
+                pattern_shape = "." if not is_resumed else "/"
                 fig1.add_trace(go.Bar(
                     x=session_df['date'],
                     y=session_df['start_time_str'],
                     width=0.4,
                     marker=dict(
                         color=get_color(session_df['end_battery'].iloc[0], is_resumed),
-                        pattern=dict(shape=[".", "/"][is_resumed])  # Dot for initial, slash for resumed
+                        pattern=dict(shape=pattern_shape)  # Use scalar pattern
                     ),
                     hovertemplate='<b>Start Time</b>: %{y}<br>Date: %{x}<br>Duration: %{customdata[0]:.1f}h<br>End Battery: %{customdata[1]}%<extra></extra>',
                     customdata=list(zip(session_df['duration_hours'], session_df['end_battery']))
@@ -139,7 +140,7 @@ if len(uploaded_files) > 0:
             # Summary for Graph 1
             st.subheader("Summary for Charging Graph")
             st.text(f"Average charging duration: {charging_groups['duration_hours'].mean():.1f} hours")
-            next_charge = charging_df.iloc[charging_df.index[-1] + 1]['timestamp'] if len(charging_df) > 1 else None
+            next_charge = charging_df.iloc[charging_df.index[-1] + 1]['timestamp'] if len(charging_df) > 1 and charging_df.index[-1] + 1 < len(filtered_df) else None
             st.text(f"Next charging start: {'N/A' if next_charge is None else next_charge.strftime('%Y-%m-%d %H:%M:%S')}")
             st.text("This graph shows start times of charging sessions. Green dots indicate initial charging, lightblue slashes show resumed charging after a break (>1 min). Duration and end battery are in hover info.")
         
