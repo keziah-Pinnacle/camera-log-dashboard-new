@@ -112,9 +112,8 @@ if len(uploaded_files) > 0:
                     y=session_df['duration_hours'],
                     name=f'Charge Session {session + 1}' if is_resumed else 'Charge Session',
                     marker_color=get_color(session_df['end_battery'].iloc[0], is_resumed),
-                    hovertemplate='<b>Charge Duration</b>: %{y:.1f}h<br>Date: %{x}<br>Start Time: %{customdata|%H:%M}<br>End Battery: %{customdata2}%<extra></extra>',
-                    customdata=session_df['start_time'].apply(lambda x: x.time()),
-                    customdata2=session_df['end_battery']
+                    hovertemplate='<b>Charge Duration</b>: %{y:.1f}h<br>Date: %{x}<br>Start Time: %{customdata[0]|%H:%M}<br>End Battery: %{customdata[1]}%<extra></extra>',
+                    customdata=list(zip(session_df['start_time'].apply(lambda x: x.time()), session_df['end_battery']))
                 ))
             
             # Ensure all dates in range are shown
