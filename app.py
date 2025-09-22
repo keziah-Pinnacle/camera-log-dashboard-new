@@ -5,7 +5,7 @@ from datetime import datetime
 import plotly.graph_objects as go
 
 st.set_page_config(page_title="Camera Log Dashboard", layout="wide")
-st.title("📊 Camera Log Monitoring Dashboard")
+st.title("Camera Log Monitoring Dashboard")
 
 # --- Parse logs ---
 def parse_logs(uploaded_files):
@@ -29,8 +29,8 @@ def parse_logs(uploaded_files):
                 })
     return pd.DataFrame(rows)
 
-# --- Compress events into start-stop ranges ---
-def build_sessions(df, keywords):
+# --- Build sessions (start/stop pairs) ---
+def build_sessions(df, keywords, start_kw, stop_kw):
     df = df[df["event"].str.contains(keywords, case=False, na=False)].copy()
     if df.empty:
         return pd.DataFrame()
@@ -38,23 +38,24 @@ def build_sessions(df, keywords):
     sessions = []
     session_start = None
     start_bat = None
-    for i, row in df.iterrows():
-        if session_start is None:
+    start_event = None
+    for _, row in df.iterrows():
+        ev = row["event"].lower()
+        if start_kw in ev:
             session_start = row["timestamp"]
             start_bat = row["battery"]
-            last_event = row["event"]
-        else:
-            if "stop" in row["event"].lower() or "off" in row["event"].lower():
-                sessions.append({
-                    "date": session_start.date(),
-                    "start": session_start,
-                    "end": row["timestamp"],
-                    "duration_h": (row["timestamp"] - session_start).total_seconds()/3600,
-                    "start_bat": start_bat,
-                    "end_bat": row["battery"],
-                    "event": last_event + " → " + row["event"]
-                })
-                session_start = None
+            start_event = row["event"]
+        elif stop_kw in ev and session_start:
+            sessions.append({
+                "date": session_start.date(),
+                "start": session_start,
+                "end": row["timestamp"],
+                "duration_h": (row["timestamp"] - session_start).total_seconds()/3600,
+                "start_bat": start_bat,
+                "end_bat": row["battery"],
+                "event": f"{start_event} → {row['event']}"
+            })
+            session_start = None
     return pd.DataFrame(sessions)
 
 # --- Upload logs ---
@@ -85,21 +86,21 @@ if uploaded_files:
         daily_summary = {}
 
         # --- 1. Charging Sessions ---
-        st.subheader("🔌 Charging Sessions")
-        charge_sessions = build_sessions(df, "Charging")
+        st.subheader("Charging Sessions")
+        charge_sessions = build_sessions(df, "Charging", "charging", "charging")
         if not charge_sessions.empty:
             fig1 = go.Figure()
-            for i, row in charge_sessions.iterrows():
+            for _, row in charge_sessions.iterrows():
                 fig1.add_trace(go.Bar(
                     x=[row["date"].strftime("%Y-%m-%d")],
                     y=[row["duration_h"]],
-                    marker_color="lightblue" if row["end_bat"] > 20 else "darkred",
+                    marker_color="lightblue" if row["end_bat"] > 20 else "darkblue",
                     name=row["event"],
                     hovertemplate=(
-                        f"<b>Date:</b> {row['date']}<br>"
-                        f"<b>Start:</b> {row['start']} ({row['start_bat']}%)<br>"
-                        f"<b>Stop:</b> {row['end']} ({row['end_bat']}%)<br>"
-                        f"<b>Duration:</b> {row['duration_h']:.2f} hours<extra></extra>"
+                        f"Date: {row['date']}<br>"
+                        f"Start: {row['start']} ({row['start_bat']}%)<br>"
+                        f"Stop: {row['end']} ({row['end_bat']}%)<br>"
+                        f"Duration: {row['duration_h']:.2f} hours<extra></extra>"
                     )
                 ))
             fig1.update_layout(
@@ -117,24 +118,24 @@ if uploaded_files:
                 summary_txt.append(f"{d}: charged {hrs:.2f} hours in {len(g)} session(s)")
                 daily_summary.setdefault(d, {"charge": 0, "use": 0, "rec": 0})
                 daily_summary[d]["charge"] += hrs
-            st.write("**Summary:** " + "; ".join(summary_txt))
+            st.write("Summary: " + "; ".join(summary_txt))
 
         # --- 2. Power On/Off ---
-        st.subheader("⚡ Power On / Off Status")
-        power_sessions = build_sessions(df, "Power")
+        st.subheader("Power On / Off Status")
+        power_sessions = build_sessions(df, "Power", "on", "off")
         if not power_sessions.empty:
             fig2 = go.Figure()
-            for i, row in power_sessions.iterrows():
+            for _, row in power_sessions.iterrows():
                 fig2.add_trace(go.Bar(
                     x=[row["date"].strftime("%Y-%m-%d")],
                     y=[row["duration_h"]],
                     marker_color="lightgreen" if "On" in row["event"] else "orange",
                     name=row["event"],
                     hovertemplate=(
-                        f"<b>Date:</b> {row['date']}<br>"
-                        f"<b>Power On:</b> {row['start']} ({row['start_bat']}%)<br>"
-                        f"<b>Power Off:</b> {row['end']} ({row['end_bat']}%)<br>"
-                        f"<b>Duration:</b> {row['duration_h']:.2f} hours<extra></extra>"
+                        f"Date: {row['date']}<br>"
+                        f"On: {row['start']} ({row['start_bat']}%)<br>"
+                        f"Off: {row['end']} ({row['end_bat']}%)<br>"
+                        f"Duration: {row['duration_h']:.2f} hours<extra></extra>"
                     )
                 ))
             fig2.update_layout(
@@ -152,24 +153,24 @@ if uploaded_files:
                 summary_txt.append(f"{d}: powered on {hrs:.2f} hours in {len(g)} session(s)")
                 daily_summary.setdefault(d, {"charge": 0, "use": 0, "rec": 0})
                 daily_summary[d]["use"] += hrs
-            st.write("**Summary:** " + "; ".join(summary_txt))
+            st.write("Summary: " + "; ".join(summary_txt))
 
         # --- 3. Recording Sessions ---
-        st.subheader("🎥 Recording / Pre-Recording")
-        rec_sessions = build_sessions(df, "Record")
+        st.subheader("Recording / Pre-Recording")
+        rec_sessions = build_sessions(df, "Record", "start", "stop")
         if not rec_sessions.empty:
             fig3 = go.Figure()
-            for i, row in rec_sessions.iterrows():
+            for _, row in rec_sessions.iterrows():
                 fig3.add_trace(go.Bar(
                     x=[row["date"].strftime("%Y-%m-%d")],
                     y=[row["duration_h"]],
                     marker_color="lightcoral" if "Start" in row["event"] else "lightsalmon",
                     name=row["event"],
                     hovertemplate=(
-                        f"<b>Date:</b> {row['date']}<br>"
-                        f"<b>Start:</b> {row['start']} ({row['start_bat']}%)<br>"
-                        f"<b>Stop:</b> {row['end']} ({row['end_bat']}%)<br>"
-                        f"<b>Duration:</b> {row['duration_h']:.2f} hours<extra></extra>"
+                        f"Date: {row['date']}<br>"
+                        f"Start: {row['start']} ({row['start_bat']}%)<br>"
+                        f"Stop: {row['end']} ({row['end_bat']}%)<br>"
+                        f"Duration: {row['duration_h']:.2f} hours<extra></extra>"
                     )
                 ))
             fig3.update_layout(
@@ -187,30 +188,30 @@ if uploaded_files:
                 summary_txt.append(f"{d}: recorded {hrs:.2f} hours in {len(g)} session(s)")
                 daily_summary.setdefault(d, {"charge": 0, "use": 0, "rec": 0})
                 daily_summary[d]["rec"] += hrs
-            st.write("**Summary:** " + "; ".join(summary_txt))
+            st.write("Summary: " + "; ".join(summary_txt))
 
         # --- Low Battery Alerts ---
         low_battery = df[df["battery"] < 20]
         if not low_battery.empty:
-            st.subheader(⚠️ Low Battery Alerts (<20%)")
+            st.subheader("Low Battery Alerts (<20%)")
             st.dataframe(low_battery[["timestamp", "camera", "event", "battery"]])
 
         # --- Daily Summary Table ---
         if daily_summary:
-            st.subheader("📅 Daily Summary (Auto-Generated)")
+            st.subheader("Daily Summary (Auto-Generated)")
             summary_df = pd.DataFrame([
-                {"Date": d, 
-                 "Total Charging (h)": v["charge"], 
-                 "Total Usage (h)": v["use"], 
+                {"Date": d,
+                 "Total Charging (h)": v["charge"],
+                 "Total Usage (h)": v["use"],
                  "Total Recording (h)": v["rec"]}
                 for d, v in daily_summary.items()
             ])
             st.dataframe(summary_df, use_container_width=True)
 
-        # --- Compressed Event Table (Non-technical names) ---
-        st.subheader("📋 Event Table (Compressed)")
-        compressed = df.copy()
-        compressed["event"] = compressed["event"].replace({
+        # --- Compressed Event Table ---
+        st.subheader("Event Table (Compressed)")
+        df_display = df.copy()
+        df_display["event"] = df_display["event"].replace({
             "Power On": "Powered On",
             "Power Off": "Powered Off",
             "Start Record": "Recording Started",
@@ -218,7 +219,7 @@ if uploaded_files:
             "Battery Charging": "Charging",
             "Pre-Record": "Pre-Recording"
         }, regex=True)
-        st.dataframe(compressed[["timestamp","camera","event","battery"]], use_container_width=True)
+        st.dataframe(df_display[["timestamp", "camera", "event", "battery"]], use_container_width=True)
 
 else:
     st.info("Upload one or more log files to get started.")
