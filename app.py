@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 st.set_page_config(page_title="Camera Log Dashboard", layout="wide")
 st.title("📊 Camera Log Monitoring Dashboard")
 
-# --- Helper: Parse logs ---
+# --- Parse logs ---
 def parse_logs(uploaded_files):
     rows = []
     for uploaded_file in uploaded_files:
@@ -28,6 +28,45 @@ def parse_logs(uploaded_files):
                     "file": filename
                 })
     return pd.DataFrame(rows)
+
+# --- Compress events (time ranges) ---
+def compress_events(df):
+    if df.empty:
+        return df
+    df = df.sort_values("timestamp").reset_index(drop=True)
+    compressed = []
+    start_row = df.iloc[0]
+    start_time = start_row["timestamp"]
+    end_time = start_time
+    start_event = start_row["event"]
+    start_bat = start_row["battery"]
+
+    for i in range(1, len(df)):
+        row = df.iloc[i]
+        if row["event"] == start_event and row["camera"] == start_row["camera"]:
+            end_time = row["timestamp"]
+        else:
+            compressed.append({
+                "Camera": start_row["camera"],
+                "Event": start_event,
+                "StartTime": start_time,
+                "EndTime": end_time,
+                "BatteryRange": f"{start_bat}% → {row['battery']}%",
+            })
+            start_row = row
+            start_event = row["event"]
+            start_time = row["timestamp"]
+            end_time = row["timestamp"]
+            start_bat = row["battery"]
+
+    compressed.append({
+        "Camera": start_row["camera"],
+        "Event": start_event,
+        "StartTime": start_time,
+        "EndTime": end_time,
+        "BatteryRange": f"{start_bat}%" if start_time == end_time else f"{start_bat}% → {row['battery']}%",
+    })
+    return pd.DataFrame(compressed)
 
 # --- Upload logs ---
 uploaded_files = st.file_uploader("Upload camera log files (.txt)", type="txt", accept_multiple_files=True)
@@ -52,113 +91,118 @@ if uploaded_files:
         selected_cameras = st.multiselect("Select Camera(s)", sorted(df["camera"].unique()), default=list(df["camera"].unique()))
         df = df[df["camera"].isin(selected_cameras)]
 
-        # --- 1. Charging Graph ---
-        st.subheader("🔌 Charging Sessions")
-        charging_df = df[df["event"].str.contains("Battery Charging", case=False, na=False)].copy()
-        if not charging_df.empty:
-            charging_df["date"] = charging_df["timestamp"].dt.date
-            charging_df["time"] = charging_df["timestamp"].dt.strftime("%H:%M:%S")
-            charging_df = charging_df.sort_values("timestamp")
+        # Ensure all dates appear on x-axis
+        all_dates = pd.date_range(df["timestamp"].dt.date.min(), df["timestamp"].dt.date.max()).strftime("%Y-%m-%d").tolist()
 
-            # Group into charging sessions (gap > 10 min = new session)
-            charging_df["session"] = (charging_df["timestamp"].diff().dt.total_seconds() > 600).cumsum()
+        # --- 1. Charging Sessions ---
+        st.subheader("🔌 Charging Sessions")
+        charging_df = df[df["event"].str.contains("Charging", case=False, na=False)]
+        if not charging_df.empty:
+            charging_df["date"] = charging_df["timestamp"].dt.strftime("%Y-%m-%d")
+            charging_df["time"] = charging_df["timestamp"].dt.strftime("%H:%M:%S")
 
             fig1 = go.Figure()
-            for session, g in charging_df.groupby("session"):
-                fig1.add_trace(go.Scatter(
-                    x=g["timestamp"],
-                    y=g["battery"],
-                    mode="lines+markers",
-                    line=dict(color="blue"),
-                    name=f"Session {session}",
-                    hovertemplate=(
-                        "<b>Time:</b> %{x}<br>"
-                        "<b>Battery Level:</b> %{y}%<extra></extra>"
-                    )
-                ))
-
+            for date, g in charging_df.groupby("date"):
+                g = g.sort_values("timestamp")
+                if len(g) > 1:
+                    start = g.iloc[0]
+                    end = g.iloc[-1]
+                    fig1.add_trace(go.Bar(
+                        x=[date],
+                        y=[(end["timestamp"] - start["timestamp"]).total_seconds()/3600],
+                        name="Charging",
+                        marker_color="lightblue",
+                        hovertemplate=(
+                            f"<b>Date:</b> {date}<br>"
+                            f"<b>Start:</b> {start['time']} ({start['battery']}%)<br>"
+                            f"<b>Stop:</b> {end['time']} ({end['battery']}%)<br>"
+                            f"<b>Duration:</b> {{y:.2f}} hours<extra></extra>"
+                        )
+                    ))
             fig1.update_layout(
-                xaxis_title="Date & Time",
-                yaxis_title="Battery % (Charging)",
+                xaxis=dict(title="Date", categoryorder="array", categoryarray=all_dates),
+                yaxis=dict(title="Charging Duration (hours)"),
                 template="plotly_white",
                 height=400
             )
             st.plotly_chart(fig1, use_container_width=True)
-            st.write("**Summary:** This chart shows when the cameras were put on charge and removed from charge. "
-                     "Each line represents one charging session. Hover to see exact time and battery %. "
-                     "Short sessions (for example 1 hour only) can be spotted here.")
+            st.write("**Summary:** Shows when charging started and stopped. Bars represent total charging hours per day.")
 
-        # --- 2. Power On/Off Graph ---
-        st.subheader("⚡ Power On / Off Timeline")
-        power_df = df[df["event"].str.contains("Power On|Power Off", case=False, na=False)].copy()
+        # --- 2. Power On/Off ---
+        st.subheader("⚡ Power On / Off Status")
+        power_df = df[df["event"].str.contains("Power On|Power Off", case=False, na=False)]
         if not power_df.empty:
-            power_df["date"] = power_df["timestamp"].dt.date
-            power_df["time"] = power_df["timestamp"].dt.strftime("%H:%M:%S")
-            power_df["type"] = power_df["event"].apply(lambda x: "Power On" if "Power On" in x else "Power Off")
+            power_df["date"] = power_df["timestamp"].dt.strftime("%Y-%m-%d")
 
             fig2 = go.Figure()
-            for typ, g in power_df.groupby("type"):
-                fig2.add_trace(go.Scatter(
-                    x=g["timestamp"],
-                    y=g["battery"],
-                    mode="markers+lines",
-                    marker=dict(size=10, color="green" if typ == "Power On" else "red"),
-                    name=typ,
-                    hovertemplate=(
-                        "<b>Event:</b> " + typ + "<br>"
-                        "<b>Time:</b> %{x}<br>"
-                        "<b>Battery Level:</b> %{y}%<extra></extra>"
-                    )
-                ))
-
+            for date, g in power_df.groupby("date"):
+                g = g.sort_values("timestamp")
+                if len(g) > 1:
+                    start = g.iloc[0]
+                    end = g.iloc[-1]
+                    fig2.add_trace(go.Bar(
+                        x=[date],
+                        y=[(end["timestamp"] - start["timestamp"]).total_seconds()/3600],
+                        name="Power On",
+                        marker_color="lightgreen",
+                        hovertemplate=(
+                            f"<b>Date:</b> {date}<br>"
+                            f"<b>Power On:</b> {start['timestamp']} ({start['battery']}%)<br>"
+                            f"<b>Power Off:</b> {end['timestamp']} ({end['battery']}%)<br>"
+                            f"<b>Duration:</b> {{y:.2f}} hours<extra></extra>"
+                        )
+                    ))
             fig2.update_layout(
-                xaxis_title="Date & Time",
-                yaxis_title="Battery % at Power On/Off",
+                xaxis=dict(title="Date", categoryorder="array", categoryarray=all_dates),
+                yaxis=dict(title="Usage Duration (hours)"),
                 template="plotly_white",
                 height=400
             )
             st.plotly_chart(fig2, use_container_width=True)
-            st.write("**Summary:** This graph shows when the cameras were powered on (green) and powered off (red). "
-                     "By comparing with charging sessions, you can see how long the camera stayed on and what the battery level was during operation.")
+            st.write("**Summary:** Shows how long the camera was powered on each day.")
 
-        # --- 3. Recording Graph ---
-        st.subheader("🎥 Recording / Pre-Recording Timeline")
-        rec_df = df[df["event"].str.contains("Record|Pre-Record", case=False, na=False)].copy()
+        # --- 3. Recording Sessions ---
+        st.subheader("🎥 Recording / Pre-Recording")
+        rec_df = df[df["event"].str.contains("Record", case=False, na=False)]
         if not rec_df.empty:
-            rec_df["date"] = rec_df["timestamp"].dt.date
-            rec_df["time"] = rec_df["timestamp"].dt.strftime("%H:%M:%S")
-            rec_df["type"] = rec_df["event"].apply(
-                lambda x: "Pre-Record" if "Pre-Record" in x else "Recording"
-            )
+            rec_df["date"] = rec_df["timestamp"].dt.strftime("%Y-%m-%d")
 
             fig3 = go.Figure()
-            for typ, g in rec_df.groupby("type"):
-                fig3.add_trace(go.Scatter(
-                    x=g["timestamp"],
-                    y=g["battery"],
-                    mode="markers+lines",
-                    marker=dict(size=10, color="blue" if typ == "Recording" else "orange"),
-                    name=typ,
-                    hovertemplate=(
-                        "<b>Event:</b> " + typ + "<br>"
-                        "<b>Time:</b> %{x}<br>"
-                        "<b>Battery Level:</b> %{y}%<extra></extra>"
-                    )
-                ))
-
+            for date, g in rec_df.groupby("date"):
+                g = g.sort_values("timestamp")
+                if len(g) > 1:
+                    start = g.iloc[0]
+                    end = g.iloc[-1]
+                    fig3.add_trace(go.Bar(
+                        x=[date],
+                        y=[(end["timestamp"] - start["timestamp"]).total_seconds()/3600],
+                        name="Recording",
+                        marker_color="lightcoral",
+                        hovertemplate=(
+                            f"<b>Date:</b> {date}<br>"
+                            f"<b>Start:</b> {start['timestamp']} ({start['battery']}%)<br>"
+                            f"<b>Stop:</b> {end['timestamp']} ({end['battery']}%)<br>"
+                            f"<b>Duration:</b> {{y:.2f}} hours<extra></extra>"
+                        )
+                    ))
             fig3.update_layout(
-                xaxis_title="Date & Time",
-                yaxis_title="Battery % during Recording",
+                xaxis=dict(title="Date", categoryorder="array", categoryarray=all_dates),
+                yaxis=dict(title="Recording Duration (hours)"),
                 template="plotly_white",
                 height=400
             )
             st.plotly_chart(fig3, use_container_width=True)
-            st.write("**Summary:** This graph shows when the cameras started and stopped recording or pre-recording. "
-                     "You can see how long recordings lasted and how the battery drained during use.")
+            st.write("**Summary:** Shows how long the camera recorded per day, with start and stop battery levels.")
 
-        # --- Event Table at bottom ---
-        st.subheader("📋 Full Event Table")
-        st.dataframe(df, use_container_width=True)
+        # --- Low Battery Alerts ---
+        low_battery = df[df["battery"] < 20]
+        if not low_battery.empty:
+            st.subheader("⚠️ Low Battery Alerts (<20%)")
+            st.dataframe(low_battery[["timestamp", "camera", "event", "battery"]])
+
+        # --- Compressed Event Table ---
+        st.subheader("📋 Event Table (Compressed)")
+        st.dataframe(compress_events(df), use_container_width=True)
 
 else:
     st.info("Upload one or more log files to get started.")
