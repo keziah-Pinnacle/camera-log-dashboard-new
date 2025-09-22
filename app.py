@@ -101,6 +101,7 @@ if len(uploaded_files) > 0:
             
             fig1 = go.Figure()
             for _, group in charging_groups.iterrows():
+                # Add start bar
                 fig1.add_trace(go.Bar(
                     x=[group['date']],
                     y=[group['start_time_str']],
@@ -110,6 +111,7 @@ if len(uploaded_files) > 0:
                     hovertemplate='<b>Start Time</b>: %{y}<br><b>Stop Time</b>: %{customdata[0]}<br><b>Duration</b>: %{customdata[1]:.1f}h<br><b>Battery</b>: %{customdata[2]}% to %{customdata[3]}%<br><b>Date</b>: %{x}<extra></extra>',
                     customdata=[group['end_time_str'], group['duration_hours'], group['start_battery'], group['end_battery']]
                 ))
+                # Add stop bar on top
                 fig1.add_trace(go.Bar(
                     x=[group['date']],
                     y=[group['end_time_str']],
@@ -136,7 +138,7 @@ if len(uploaded_files) > 0:
                 height=400,
                 font=dict(size=11, family="Arial"),
                 hovermode='x unified',
-                barmode='group'
+                barmode='stack'  # Stack bars vertically
             )
             
             st.plotly_chart(fig1, use_container_width=True)
