@@ -8,7 +8,7 @@ import re
 st.set_page_config(page_title="Camera Log Dashboard", layout="wide")
 
 # Color function for battery health and charging states
-def get_color(bat, is_resumed=False):
+def get_color(bat, is_start=True):
     if bat <= 20:
         return 'red'
     elif bat <= 60:
@@ -92,6 +92,7 @@ if len(uploaded_files) > 0:
         if not charging_df.empty:
             charging_df['date'] = charging_df['timestamp'].dt.date
             charging_df['time'] = charging_df['timestamp'].dt.strftime('%H:%M:%S')
+            # Identify charging sessions (group by consecutive charging events)
             charging_df = charging_df.sort_values('timestamp')
             charging_df['session'] = (charging_df['timestamp'].diff().dt.total_seconds() > 60).cumsum()  # New session if gap > 1 minute
             charging_groups = charging_df.groupby(['date', 'session']).agg({
@@ -104,17 +105,27 @@ if len(uploaded_files) > 0:
             charging_groups['duration_hours'] = charging_groups['duration_seconds'] / 3600
             
             fig1 = go.Figure()
-            for _, group in charging_groups.iterrows():
-                # Add charging bar (continuous)
-                fig1.add_trace(go.Bar(
-                    x=[group['date']],
-                    y=[group['start_time_str']],
-                    width=0.4,
-                    marker_color=get_color(group['end_battery'], group['session'] > 0),
-                    name='Charging Session',
-                    hovertemplate='<b>Start Time</b>: %{y}<br><b>Stop Time</b>: %{customdata[0]}<br><b>Duration</b>: %{customdata[1]:.1f}h<br><b>Battery</b>: %{customdata[2]}% to %{customdata[3]}%<br><b>Date</b>: %{x}<extra></extra>',
-                    customdata=[group['end_time_str'], group['duration_hours'], group['start_battery'], group['end_battery']]
-                ))
+            # Add one trace for start and one for stop to avoid repetition
+            fig1.add_trace(go.Bar(
+                x=charging_groups['date'],
+                y=charging_groups['start_time_str'],
+                width=0.4,
+                marker_color='lightgreen',
+                name='Start Charging',
+                hovertemplate='<b>Start Time</b>: %{y}<br><b>Stop Time</b>: %{customdata[0]}<br><b>Duration</b>: %{customdata[1]:.1f}h<br><b>Battery</b>: %{customdata[2]}% to %{customdata[3]}%<br><b>Date</b>: %{x}<extra></extra>',
+                customdata=list(zip(charging_groups['end_time_str'], charging_groups['duration_hours'], charging_groups['start_battery'], charging_groups['end_battery'])),
+                showlegend=True  # Only show legend for first
+            ))
+            fig1.add_trace(go.Bar(
+                x=charging_groups['date'],
+                y=charging_groups['end_time_str'],
+                width=0.4,
+                marker_color='lightcoral',
+                name='Stop Charging',
+                hovertemplate='<b>Start Time</b>: %{customdata[0]}<br><b>Stop Time</b>: %{y}<br><b>Duration</b>: %{customdata[1]:.1f}h<br><b>Battery</b>: %{customdata[2]}% to %{customdata[3]}%<br><b>Date</b>: %{x}<extra></extra>',
+                customdata=list(zip(charging_groups['start_time_str'], charging_groups['duration_hours'], charging_groups['start_battery'], charging_groups['end_battery'])),
+                showlegend=True  # Only show legend for first
+            ))
             
             # Ensure all dates in range are shown
             all_dates = pd.date_range(start=charging_df['date'].min(), end=charging_df['date'].max(), freq='D')
@@ -132,7 +143,7 @@ if len(uploaded_files) > 0:
                 height=400,
                 font=dict(size=11, family="Arial"),
                 hovermode='x unified',
-                barmode='group'
+                barmode='stack'  # Stack bars vertically
             )
             
             st.plotly_chart(fig1, use_container_width=True)
@@ -140,7 +151,7 @@ if len(uploaded_files) > 0:
             # Summary for Graph 1
             st.subheader("Summary for Charging Graph")
             st.text(f"Average charging duration: {charging_groups['duration_hours'].mean():.1f} hours")
-            st.text("This graph shows charging sessions per day. Hover for details.")
+            st.text("This graph shows charging sessions per day. Lightgreen for start, lightcoral for stop. Hover for details.")
         
         # Graph 2: Power On/Off Timeline
         st.subheader("Power On/Off Timeline")
@@ -151,30 +162,25 @@ if len(uploaded_files) > 0:
             power_df['type'] = power_df['normalized_event'].apply(lambda x: 'Power On' if 'Power On' in x else 'Power Off')
             
             fig2 = go.Figure()
-            for date in power_df['date'].unique():
-                date_df = power_df[power_df['date'] == date]
-                on_df = date_df[date_df['type'] == 'Power On']
-                off_df = date_df[date_df['type'] == 'Power Off']
-                if not on_df.empty:
-                    fig2.add_trace(go.Bar(
-                        x=[date],
-                        y=on_df['time'],
-                        width=0.4,
-                        marker_color='lightgreen',
-                        name='Power On',
-                        hovertemplate='<b>Time</b>: %{y}<br><b>Type</b>: Power On<br><b>Battery</b>: %{customdata:.1f}%<br><b>Date</b>: %{x}<extra></extra>',
-                        customdata=on_df['battery']
-                    ))
-                if not off_df.empty:
-                    fig2.add_trace(go.Bar(
-                        x=[date],
-                        y=off_df['time'],
-                        width=0.4,
-                        marker_color='lightcoral',
-                        name='Power Off',
-                        hovertemplate='<b>Time</b>: %{y}<br><b>Type</b>: Power Off<br><b>Battery</b>: %{customdata:.1f}%<br><b>Date</b>: %{x}<extra></extra>',
-                        customdata=off_df['battery']
-                    ))
+            # Add one trace for Power On and one for Power Off
+            fig2.add_trace(go.Bar(
+                x=power_df[power_df['type'] == 'Power On']['date'],
+                y=power_df[power_df['type'] == 'Power On']['time'],
+                width=0.4,
+                marker_color='lightgreen',
+                name='Power On',
+                hovertemplate='<b>Time</b>: %{y}<br><b>Type</b>: Power On<br><b>Battery</b>: %{customdata:.1f}%<br><b>Date</b>: %{x}<extra></extra>',
+                customdata=power_df[power_df['type'] == 'Power On']['battery']
+            ))
+            fig2.add_trace(go.Bar(
+                x=power_df[power_df['type'] == 'Power Off']['date'],
+                y=power_df[power_df['type'] == 'Power Off']['time'],
+                width=0.4,
+                marker_color='lightcoral',
+                name='Power Off',
+                hovertemplate='<b>Time</b>: %{y}<br><b>Type</b>: Power Off<br><b>Battery</b>: %{customdata:.1f}%<br><b>Date</b>: %{x}<extra></extra>',
+                customdata=power_df[power_df['type'] == 'Power Off']['battery']
+            ))
             
             # Ensure all dates in range are shown
             all_dates = pd.date_range(start=power_df['date'].min(), end=power_df['date'].max(), freq='D')
@@ -192,7 +198,7 @@ if len(uploaded_files) > 0:
                 height=400,
                 font=dict(size=11, family="Arial"),
                 hovermode='x unified',
-                barmode='stack'  # Stack red on green
+                barmode='group'
             )
             
             st.plotly_chart(fig2, use_container_width=True)
