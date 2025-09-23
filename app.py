@@ -3,7 +3,6 @@ import streamlit as st
 import pandas as pd
 import re
 from datetime import datetime
-import plotly.express as px
 import plotly.graph_objects as go
 from io import BytesIO
 
@@ -52,18 +51,17 @@ def compress_events(df):
     return df2
 
 def plot_sessions(df, title, color):
-    """df must have Camera, Start, End, StartBat, EndBat"""
     if df.empty:
-        st.info(f"No {title.lower()} sessions found.")
+        st.info(f"No {title.lower()} found.")
         return
     fig = go.Figure()
     for cam, g in df.groupby("Camera"):
         for _,r in g.iterrows():
             fig.add_trace(go.Bar(
-                x=[(r["End"]-r["Start"]).total_seconds()/3600],
+                x=[(r["End"]-r["Start"]).total_seconds()/60],  # minutes
                 y=[f"{cam} {r['Start'].date()}"],
                 orientation="h",
-                base=(r["Start"].hour+r["Start"].minute/60),
+                base=r["Start"],
                 marker_color=color,
                 hovertemplate=(
                     f"Camera: {cam}<br>"
@@ -74,9 +72,8 @@ def plot_sessions(df, title, color):
             ))
     fig.update_layout(
         title=title,
-        xaxis_title="Duration (hours)",
+        xaxis_title="Time",
         yaxis_title="Camera/Date",
-        barmode="stack",
         bargap=0.2,
         template="plotly_white",
         height=400
@@ -85,17 +82,19 @@ def plot_sessions(df, title, color):
 
 def download_df(df, name):
     # CSV
-    st.download_button(f"Download {name} CSV",
+    st.download_button(
+        f"Download {name} CSV",
         df.to_csv(index=False).encode("utf-8"),
         file_name=f"{name.lower().replace(' ','_')}.csv",
         mime="text/csv"
     )
-    # Excel with openpyxl
+    # Excel
     towrite = BytesIO()
     with pd.ExcelWriter(towrite, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name=name)
     towrite.seek(0)
-    st.download_button(f"Download {name} Excel",
+    st.download_button(
+        f"Download {name} Excel",
         data=towrite,
         file_name=f"{name.lower().replace(' ','_')}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -107,11 +106,11 @@ def download_df(df, name):
 files = st.file_uploader("Upload log files", type=["txt","log"], accept_multiple_files=True)
 if not files: st.stop()
 df = parse_logs(files)
-if df.empty: 
+if df.empty:
     st.error("No valid log entries.")
     st.stop()
 
-# Compressed table
+# Event Table
 comp = compress_events(df)
 st.subheader("Event Table (compressed)")
 st.dataframe(comp, width="stretch")
@@ -132,7 +131,7 @@ rec = comp[comp["Event"].str.contains("Record",case=False,na=False)]
 st.subheader("Recording Sessions")
 plot_sessions(rec,"Recording/Pre-Recording","lightcoral")
 
-# Daily summary
+# Daily Summary
 if not comp.empty:
     comp["Date"] = comp["Start"].dt.date
     summary = comp.groupby(["Camera","Date"]).agg(
