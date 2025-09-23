@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import re
-from datetime import timedelta
+from datetime import datetime, timedelta   # ✅ fix: include timedelta for gaps
 import plotly.graph_objects as go
 from io import BytesIO
 
@@ -40,16 +40,22 @@ def compress_events(df):
         if r["camera"]==cur_cam and r["event"]==cur_ev:
             end, end_bat = r["timestamp"], r["battery"]
         else:
-            # add small gap between sessions
             out.append([cur_cam, cur_ev, start, end, start_bat, end_bat])
             cur_cam, cur_ev = r["camera"], r["event"]
-            start = r["timestamp"] + timedelta(seconds=1)  # gap
+            # ✅ add small gap between adjacent events
+            start = r["timestamp"] + timedelta(seconds=1)
             start_bat = r["battery"]
             end, end_bat = start, start_bat
     out.append([cur_cam, cur_ev, start, end, start_bat, end_bat])
     df2 = pd.DataFrame(out, columns=["Camera","Event","Start","End","StartBat","EndBat"])
     df2["Duration_h"] = (df2["End"]-df2["Start"]).dt.total_seconds()/3600
     return df2
+
+def format_duration(hours):
+    """Convert decimal hours → hh:mm string"""
+    total_minutes = int(hours * 60)
+    h, m = divmod(total_minutes, 60)
+    return f"{h}h {m}m"
 
 def plot_ranges(df, title, event_map):
     if df.empty:
@@ -73,7 +79,7 @@ def plot_ranges(df, title, event_map):
                 f"Camera: {r['Camera']}<br>"
                 f"Start: {r['Start']} ({r['StartBat']}%)<br>"
                 f"End: {r['End']} ({r['EndBat']}%)<br>"
-                f"Duration: {r['Duration_h']:.2f}h<extra></extra>"
+                f"Duration: {format_duration(r['Duration_h'])}<extra></extra>"
             )
         ))
     fig.update_layout(
@@ -154,6 +160,11 @@ if not comp.empty:
         Total_Power_h=("Duration_h", lambda x: x[comp["Event"].str.contains("Power")].sum()),
         Total_Record_h=("Duration_h", lambda x: x[comp["Event"].str.contains("Record")].sum())
     ).reset_index()
+
+    # ✅ format durations in hh:mm
+    for col in ["Total_Charging_h","Total_Power_h","Total_Record_h"]:
+        summary[col] = summary[col].apply(format_duration)
+
     st.subheader("Daily Summary")
     st.dataframe(summary, width="stretch")
     download_df(summary,"Daily Summary")
