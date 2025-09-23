@@ -8,13 +8,13 @@ import re
 st.set_page_config(page_title="Camera Log Dashboard", layout="wide")
 
 # Color function for battery health and charging states
-def get_color(bat, is_start=True):
+def get_color(bat, is_resumed=False):
     if bat <= 20:
-        return 'darkred'
+        return 'red'
     elif bat <= 60:
         return 'orange'
     else:
-        return 'lightgreen' if is_start else 'lightcoral'  # Light green for start, light red for stop
+        return 'darkgreen' if not is_resumed else 'lightblue'  # Different color for resumed charging
 
 # Title
 st.title("Camera Log Dashboard")
@@ -104,25 +104,17 @@ if len(uploaded_files) > 0:
             charging_groups['duration_hours'] = charging_groups['duration_seconds'] / 3600
             
             fig1 = go.Figure()
-            # Only add one trace for start and one for stop per graph
-            fig1.add_trace(go.Bar(
-                x=charging_groups['date'],
-                y=charging_groups['start_time_str'],
-                width=0.4,
-                marker_color='lightgreen',
-                name='Start Charging',
-                hovertemplate='<b>Start Time</b>: %{y}<br><b>Stop Time</b>: %{customdata[0]}<br><b>Duration</b>: %{customdata[1]:.1f}h<br><b>Battery</b>: %{customdata[2]}% to %{customdata[3]}%<br><b>Date</b>: %{x}<extra></extra>',
-                customdata=list(zip(charging_groups['end_time_str'], charging_groups['duration_hours'], charging_groups['start_battery'], charging_groups['end_battery']))
-            ))
-            fig1.add_trace(go.Bar(
-                x=charging_groups['date'],
-                y=charging_groups['end_time_str'],
-                width=0.4,
-                marker_color='lightcoral',
-                name='Stop Charging',
-                hovertemplate='<b>Start Time</b>: %{customdata[0]}<br><b>Stop Time</b>: %{y}<br><b>Duration</b>: %{customdata[1]:.1f}h<br><b>Battery</b>: %{customdata[2]}% to %{customdata[3]}%<br><b>Date</b>: %{x}<extra></extra>',
-                customdata=list(zip(charging_groups['start_time_str'], charging_groups['duration_hours'], charging_groups['start_battery'], charging_groups['end_battery']))
-            ))
+            for _, group in charging_groups.iterrows():
+                # Add charging bar (continuous)
+                fig1.add_trace(go.Bar(
+                    x=[group['date']],
+                    y=[group['start_time_str']],
+                    width=0.4,
+                    marker_color=get_color(group['end_battery'], group['session'] > 0),
+                    name='Charging Session',
+                    hovertemplate='<b>Start Time</b>: %{y}<br><b>Stop Time</b>: %{customdata[0]}<br><b>Duration</b>: %{customdata[1]:.1f}h<br><b>Battery</b>: %{customdata[2]}% to %{customdata[3]}%<br><b>Date</b>: %{x}<extra></extra>',
+                    customdata=[group['end_time_str'], group['duration_hours'], group['start_battery'], group['end_battery']]
+                ))
             
             # Ensure all dates in range are shown
             all_dates = pd.date_range(start=charging_df['date'].min(), end=charging_df['date'].max(), freq='D')
@@ -140,7 +132,7 @@ if len(uploaded_files) > 0:
                 height=400,
                 font=dict(size=11, family="Arial"),
                 hovermode='x unified',
-                barmode='stack'  # Stack bars vertically
+                barmode='group'
             )
             
             st.plotly_chart(fig1, use_container_width=True)
@@ -148,7 +140,7 @@ if len(uploaded_files) > 0:
             # Summary for Graph 1
             st.subheader("Summary for Charging Graph")
             st.text(f"Average charging duration: {charging_groups['duration_hours'].mean():.1f} hours")
-            st.text("This graph shows charging sessions per day. Lightgreen for start, lightcoral for stop. Hover for details.")
+            st.text("This graph shows charging sessions per day. Hover for details.")
         
         # Graph 2: Power On/Off Timeline
         st.subheader("Power On/Off Timeline")
@@ -264,7 +256,7 @@ if len(uploaded_files) > 0:
                 height=400,
                 font=dict(size=11, family="Arial"),
                 hovermode='x unified',
-                barmode='group'
+                barmode='stack'
             )
             
             st.plotly_chart(fig3, use_container_width=True)
