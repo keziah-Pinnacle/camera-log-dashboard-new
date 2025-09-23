@@ -1,8 +1,7 @@
-# app.py
 import streamlit as st
 import pandas as pd
 import re
-from datetime import datetime
+from datetime import timedelta
 import plotly.graph_objects as go
 from io import BytesIO
 
@@ -41,40 +40,46 @@ def compress_events(df):
         if r["camera"]==cur_cam and r["event"]==cur_ev:
             end, end_bat = r["timestamp"], r["battery"]
         else:
+            # add small gap between sessions
             out.append([cur_cam, cur_ev, start, end, start_bat, end_bat])
             cur_cam, cur_ev = r["camera"], r["event"]
-            start, start_bat = r["timestamp"], r["battery"]
+            start = r["timestamp"] + timedelta(seconds=1)  # gap
+            start_bat = r["battery"]
             end, end_bat = start, start_bat
     out.append([cur_cam, cur_ev, start, end, start_bat, end_bat])
     df2 = pd.DataFrame(out, columns=["Camera","Event","Start","End","StartBat","EndBat"])
     df2["Duration_h"] = (df2["End"]-df2["Start"]).dt.total_seconds()/3600
     return df2
 
-def plot_sessions(df, title, color):
+def plot_ranges(df, title, event_map):
     if df.empty:
         st.info(f"No {title.lower()} found.")
         return
     fig = go.Figure()
-    for cam, g in df.groupby("Camera"):
-        for _,r in g.iterrows():
-            fig.add_trace(go.Bar(
-                x=[(r["End"]-r["Start"]).total_seconds()/60],  # minutes
-                y=[f"{cam} {r['Start'].date()}"],
-                orientation="h",
-                base=r["Start"],
-                marker_color=color,
-                hovertemplate=(
-                    f"Camera: {cam}<br>"
-                    f"Start: {r['Start']} ({r['StartBat']}%)<br>"
-                    f"End: {r['End']} ({r['EndBat']}%)<br>"
-                    f"Duration: {r['Duration_h']:.2f}h<extra></extra>"
-                )
-            ))
+    shown = set()
+    for _,r in df.iterrows():
+        ev = r["Event"]
+        color, label = event_map.get(ev, ("grey", ev))
+        showlegend = False if label in shown else True
+        shown.add(label)
+        fig.add_trace(go.Scatter(
+            x=[r["Start"], r["End"]],
+            y=[r["Camera"], r["Camera"]],
+            mode="lines",
+            line=dict(color=color, width=10),
+            name=label,
+            showlegend=showlegend,
+            hovertemplate=(
+                f"Camera: {r['Camera']}<br>"
+                f"Start: {r['Start']} ({r['StartBat']}%)<br>"
+                f"End: {r['End']} ({r['EndBat']}%)<br>"
+                f"Duration: {r['Duration_h']:.2f}h<extra></extra>"
+            )
+        ))
     fig.update_layout(
         title=title,
         xaxis_title="Time",
-        yaxis_title="Camera/Date",
-        bargap=0.2,
+        yaxis_title="Camera",
         template="plotly_white",
         height=400
     )
@@ -119,17 +124,27 @@ download_df(comp,"Event Table")
 # Charging
 charging = comp[comp["Event"].str.contains("Charging",case=False,na=False)]
 st.subheader("Charging Sessions")
-plot_sessions(charging,"Charging Sessions","lightblue")
+plot_ranges(charging,"Charging Sessions", {
+    "Battery Charging": ("blue","Charging")
+})
 
 # Power
 power = comp[comp["Event"].str.contains("Power",case=False,na=False)]
 st.subheader("Power Sessions")
-plot_sessions(power,"Power On/Off","lightgreen")
+plot_ranges(power,"Power On/Off", {
+    "System Power On": ("green","Power On"),
+    "System Power Off": ("red","Power Off")
+})
 
 # Recording
 rec = comp[comp["Event"].str.contains("Record",case=False,na=False)]
 st.subheader("Recording Sessions")
-plot_sessions(rec,"Recording/Pre-Recording","lightcoral")
+plot_ranges(rec,"Recording/Pre-Recording", {
+    "Start Recording": ("darkorange","Recording Start"),
+    "Stop Recording": ("orange","Recording Stop"),
+    "Start PreRecord": ("purple","PreRecord Start"),
+    "Stop PreRecord": ("violet","PreRecord Stop")
+})
 
 # Daily Summary
 if not comp.empty:
