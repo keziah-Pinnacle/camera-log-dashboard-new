@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 from io import BytesIO
 
 st.set_page_config(page_title="Camera Log Dashboard", layout="wide")
-st.title("Camera Log Monitoring Dashboard")
+st.markdown("<h1 style='color:#2E86C1;'>📹 Camera Log Monitoring Dashboard</h1>", unsafe_allow_html=True)
 
 # ---- Config ----
 EVENT_NORMALIZE = {
@@ -18,16 +18,17 @@ EVENT_NORMALIZE = {
     "Stop Record": "Stop Record",
     "Start Pre Record": "Start PreRecord",
     "Stop PreRecord": "Stop PreRecord",
+    "Stop Pre Record": "Stop PreRecord",  # fix for logs with space
 }
 EVENT_COLORS = {
-    "Start Charge": "#4A90E2",
-    "Stop Charge": "#2ECC71",
+    "Start Charge": "#3498DB",
+    "Stop Charge": "#1ABC9C",
     "Power On": "#2ECC71",
-    "Power Off": "#E94B35",
-    "Start Record": "#90EE90",
-    "Stop Record": "#FF7F7F",
-    "Start PreRecord": "#87CEFA",
-    "Stop PreRecord": "#00008B",
+    "Power Off": "#E74C3C",
+    "Start Record": "#2ECC71",   # light green
+    "Stop Record": "#FF7F7F",    # light red
+    "Start PreRecord": "#87CEFA",# light blue
+    "Stop PreRecord": "#00008B", # dark blue
 }
 def human_event(raw):
     for k in EVENT_NORMALIZE:
@@ -46,7 +47,7 @@ def parse_logs(files):
                 continue
             ts, cam, ev, bat = m.groups()
             ts = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
-            cam_short = cam.split("-")[0]  # only first 6 digits
+            cam_short = cam.split("-")[0]
             rows.append({
                 "timestamp": ts,
                 "camera": cam_short,
@@ -85,7 +86,7 @@ def download_buttons(df,name):
     st.download_button(f"⬇ {name} Excel", buf.getvalue(), f"{name}.xlsx", key=f"{name}_xls")
 
 # ---- UI ----
-files = st.sidebar.file_uploader("Upload logs",type=["txt","log"],accept_multiple_files=True)
+files = st.sidebar.file_uploader("📂 Upload logs",type=["txt","log"],accept_multiple_files=True)
 if not files: st.stop()
 df = parse_logs(files)
 if df.empty: st.error("No data"); st.stop()
@@ -93,84 +94,94 @@ sessions = compress_sessions(df)
 
 # Date filter
 min_d,max_d = df["timestamp"].min().date(), df["timestamp"].max().date()
-date_range = st.sidebar.date_input("Select Date Range", [min_d,max_d], min_value=min_d, max_value=max_d)
+date_range = st.sidebar.date_input("📅 Select Date Range", [min_d,max_d], min_value=min_d, max_value=max_d)
 if len(date_range)==2:
     start,end = date_range
     sessions = sessions[(sessions["Date"]>=start)&(sessions["Date"]<=end)]
 
-# ---- Charging ----
-st.header("Charging Sessions")
-fig = go.Figure()
-used=set()
-for _,r in sessions[sessions["Event"].str.contains("Charge")].iterrows():
-    showlegend = r["Event"] not in used
-    used.add(r["Event"])
-    fig.add_trace(go.Bar(
-        x=[r["Date"]], y=[r["Duration_h"]],
-        marker_color=EVENT_COLORS[r["Event"]],
-        name=r["Event"],
-        showlegend=showlegend,
-        hovertext=f"{r['Camera']} {r['Event']}<br>{r['Start']} - {r['End']}<br>Duration: {format_duration(r['Duration_h'])}"
-    ))
-fig.update_layout(barmode="stack",yaxis_title="Hours",xaxis_title="Date",template="plotly_white")
-st.plotly_chart(fig,use_container_width=True)
-summary = sessions[sessions["Event"].str.contains("Charge")].groupby(["Camera","Date"])["Duration_h"].sum().reset_index()
-summary["TotalCharging"] = summary["Duration_h"].apply(format_duration)
-st.dataframe(summary[["Camera","Date","TotalCharging"]])
-download_buttons(summary,"ChargingSummary")
+# Camera selector
+cameras = sessions["Camera"].unique().tolist()
+selected_cams = st.sidebar.multiselect("🎥 Select Cameras", cameras, default=cameras)
+sessions = sessions[sessions["Camera"].isin(selected_cams)]
 
-# ---- Power ----
-st.header("Power On / Off")
-fig = go.Figure()
-used=set()
-for _,r in sessions[sessions["Event"].str.contains("Power")].iterrows():
-    showlegend = r["Event"] not in used
-    used.add(r["Event"])
-    fig.add_trace(go.Bar(
-        x=[r["Date"]], y=[r["Duration_h"]*60], # minutes
-        marker_color=EVENT_COLORS[r["Event"]],
-        name=r["Event"],
-        showlegend=showlegend,
-        hovertext=f"{r['Camera']} {r['Event']}<br>{r['Start']} - {r['End']}<br>Duration: {format_duration(r['Duration_h'])}"
-    ))
-fig.update_layout(barmode="stack",yaxis_title="Duration (minutes/hours)",xaxis_title="Date",template="plotly_white")
-st.plotly_chart(fig,use_container_width=True)
-summary = sessions[sessions["Event"].str.contains("Power")].groupby(["Camera","Date","Event"])["Duration_h"].sum().reset_index()
-summary["Duration"] = summary["Duration_h"].apply(format_duration)
-st.dataframe(summary[["Camera","Date","Event","Duration"]])
-download_buttons(summary,"PowerSummary")
+# ---- Tabs ----
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["Overview","Charging","Power","Recording","Daily Summary"])
 
-# ---- Recording ----
-st.header("Recording / PreRecord")
-fig = go.Figure()
-used=set()
-for _,r in sessions[sessions["Event"].str.contains("Record")].iterrows():
-    showlegend = r["Event"] not in used
-    used.add(r["Event"])
-    fig.add_trace(go.Bar(
-        x=[r["Date"]], y=[r["Duration_h"]*60],
-        marker_color=EVENT_COLORS[r["Event"]],
-        name=r["Event"],
-        showlegend=showlegend,
-        hovertext=f"{r['Camera']} {r['Event']}<br>{r['Start']} - {r['End']}<br>Duration: {format_duration(r['Duration_h'])}"
-    ))
-fig.update_layout(barmode="stack",yaxis_title="Duration (minutes/hours)",xaxis_title="Date",template="plotly_white")
-st.plotly_chart(fig,use_container_width=True)
-summary = sessions[sessions["Event"].str.contains("Record")].groupby(["Camera","Date","Event"])["Duration_h"].sum().reset_index()
-summary["Duration"] = summary["Duration_h"].apply(format_duration)
-st.dataframe(summary[["Camera","Date","Event","Duration"]])
-download_buttons(summary,"RecordingSummary")
+with tab1:
+    st.subheader("📊 Overview")
+    st.metric("Total Cameras", len(cameras))
+    st.metric("Date Range", f"{start} → {end}")
+    st.metric("Total Events", len(df))
 
-# ---- Daily Summary ----
-st.header("Daily Summary")
-st.write("This is the overall summary of events for the selected logs.")
-daily = sessions.groupby(["Camera","Date"]).agg(
-    Charging_h=("Duration_h",lambda x:x[sessions.loc[x.index,"Event"].str.contains("Charge")].sum()),
-    Power_h=("Duration_h",lambda x:x[sessions.loc[x.index,"Event"].str.contains("Power")].sum()),
-    Record_h=("Duration_h",lambda x:x[sessions.loc[x.index,"Event"].str.contains("Record")].sum())
-).reset_index()
-daily["Charging"] = daily["Charging_h"].apply(format_duration)
-daily["Power"] = daily["Power_h"].apply(format_duration)
-daily["Record"] = daily["Record_h"].apply(format_duration)
-st.dataframe(daily[["Camera","Date","Charging","Power","Record"]])
-download_buttons(daily,"DailySummary")
+with tab2:
+    st.subheader("🔋 Charging Sessions")
+    fig = go.Figure()
+    used=set()
+    for _,r in sessions[sessions["Event"].str.contains("Charge")].iterrows():
+        showlegend = r["Event"] not in used
+        used.add(r["Event"])
+        fig.add_trace(go.Bar(
+            x=[r["Start"]], y=[r["Duration_h"]],
+            marker_color=EVENT_COLORS[r["Event"]],
+            name=r["Event"], showlegend=showlegend,
+            hovertext=f"{r['Camera']} {r['Event']}<br>{r['Start']} - {r['End']}<br>Duration: {format_duration(r['Duration_h'])}"
+        ))
+    fig.update_layout(barmode="stack",yaxis_title="Hours",xaxis_title="DateTime",template="plotly_white")
+    st.plotly_chart(fig,use_container_width=True)
+    summary = sessions[sessions["Event"].str.contains("Charge")].copy()
+    summary["Duration"] = summary["Duration_h"].apply(format_duration)
+    st.dataframe(summary[["Camera","Event","Start","End","Duration"]])
+    download_buttons(summary,"ChargingSummary")
+
+with tab3:
+    st.subheader("⚡ Power On / Off")
+    fig = go.Figure()
+    used=set()
+    for _,r in sessions[sessions["Event"].str.contains("Power")].iterrows():
+        showlegend = r["Event"] not in used
+        used.add(r["Event"])
+        fig.add_trace(go.Bar(
+            x=[r["Start"]], y=[r["Duration_h"]*60],
+            marker_color=EVENT_COLORS[r["Event"]],
+            name=r["Event"], showlegend=showlegend,
+            hovertext=f"{r['Camera']} {r['Event']}<br>{r['Start']} - {r['End']}<br>Duration: {format_duration(r['Duration_h'])}"
+        ))
+    fig.update_layout(barmode="stack",yaxis_title="Minutes/Hours",xaxis_title="DateTime",template="plotly_white")
+    st.plotly_chart(fig,use_container_width=True)
+    summary = sessions[sessions["Event"].str.contains("Power")].copy()
+    summary["Duration"] = summary["Duration_h"].apply(format_duration)
+    st.dataframe(summary[["Camera","Event","Start","End","Duration"]])
+    download_buttons(summary,"PowerSummary")
+
+with tab4:
+    st.subheader("🎬 Recording / PreRecord")
+    fig = go.Figure()
+    used=set()
+    for _,r in sessions[sessions["Event"].str.contains("Record")].iterrows():
+        showlegend = r["Event"] not in used
+        used.add(r["Event"])
+        fig.add_trace(go.Bar(
+            x=[r["Start"]], y=[r["Duration_h"]*60],
+            marker_color=EVENT_COLORS[r["Event"]],
+            name=r["Event"], showlegend=showlegend,
+            hovertext=f"{r['Camera']} {r['Event']}<br>{r['Start']} - {r['End']}<br>Duration: {format_duration(r['Duration_h'])}"
+        ))
+    fig.update_layout(barmode="stack",yaxis_title="Minutes/Hours",xaxis_title="DateTime",template="plotly_white")
+    st.plotly_chart(fig,use_container_width=True)
+    summary = sessions[sessions["Event"].str.contains("Record")].copy()
+    summary["Duration"] = summary["Duration_h"].apply(format_duration)
+    st.dataframe(summary[["Camera","Event","Start","End","Duration"]])
+    download_buttons(summary,"RecordingSummary")
+
+with tab5:
+    st.subheader("📑 Daily Summary")
+    daily = sessions.groupby(["Camera","Date"]).agg(
+        Charging_h=("Duration_h",lambda x:x[sessions.loc[x.index,"Event"].str.contains("Charge")].sum()),
+        Power_h=("Duration_h",lambda x:x[sessions.loc[x.index,"Event"].str.contains("Power")].sum()),
+        Record_h=("Duration_h",lambda x:x[sessions.loc[x.index,"Event"].str.contains("Record")].sum())
+    ).reset_index()
+    daily["Charging"] = daily["Charging_h"].apply(format_duration)
+    daily["Power"] = daily["Power_h"].apply(format_duration)
+    daily["Record"] = daily["Record_h"].apply(format_duration)
+    st.dataframe(daily[["Camera","Date","Charging","Power","Record"]])
+    download_buttons(daily,"DailySummary")
