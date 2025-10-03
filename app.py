@@ -5,21 +5,9 @@ import re
 from datetime import datetime
 import plotly.graph_objects as go
 from io import BytesIO
-import traceback
 
-# ---- Streamlit Config ----
 st.set_page_config(page_title="Camera Log Dashboard", layout="wide")
-st.markdown("""
-    <style>
-    body { background-color: #1E1E1E; color: #F0F0F0; font-family: 'Segoe UI', sans-serif; }
-    h1, h2, h3 { color: #00BFFF; }
-    .stButton>button { background-color: #00BFFF; color: white; border-radius: 8px; }
-    .stDownloadButton>button { background-color: #1ABC9C; color: white; border-radius: 8px; font-size: 13px; padding: 0.3em 1em; }
-    .stDataFrame { background-color: #2A2A2A; }
-    </style>
-""", unsafe_allow_html=True)
-
-st.markdown("<h1>📹 Real-Time Camera Monitoring Dashboard</h1>", unsafe_allow_html=True)
+st.markdown("<h1 style='color:#00BFFF;'>📹 Camera Monitoring Dashboard</h1>", unsafe_allow_html=True)
 
 # ---- Config ----
 EVENT_NORMALIZE = {
@@ -125,75 +113,71 @@ with tab1:
     st.metric("Total Cameras", len(sel_cams))
     st.metric("Sessions", len(sessions))
 
+# Charging
 with tab2:
     st.subheader("🔋 Charging")
     sel = sessions[sessions["Event"].str.contains("Charge")]
     if not sel.empty:
         fig = go.Figure()
-        used=set()
-        for _,r in sel.iterrows():
-            show = r["Event"] not in used
-            used.add(r["Event"])
+        for ev in ["Start Charge","Stop Charge"]:
+            ev_df = sel[sel["Event"]==ev]
             fig.add_trace(go.Bar(
-                x=[r["Start"]], y=[r["Duration_h"]],
-                marker_color=EVENT_COLORS[r["Event"]],
-                name=r["Event"] if show else None,
-                hovertext=f"{r['Camera']} | {r['Start']} → {r['End']} | {fmt_duration(r['Duration_h'])}"
+                x=ev_df["Start"], y=ev_df["Duration_h"],
+                marker_color=EVENT_COLORS[ev],
+                name=ev,
+                hovertext=[f"{c} | {s} → {e} | {fmt_duration(d)}" for c,s,e,d in zip(ev_df["Camera"],ev_df["Start"],ev_df["End"],ev_df["Duration_h"])]
             ))
-        fig.update_layout(barmode="stack", yaxis_title="Hours", xaxis_title="DateTime", template="plotly_dark")
+        fig.update_layout(barmode="stack", yaxis_title="Hours", xaxis_title="DateTime", template="plotly_white")
         st.plotly_chart(fig, use_container_width=True, key="charge")
-        # summary: merge start/stop into one row called Charge Time
-        summary = sel.copy()
-        summary["Duration"] = summary["Duration_h"].apply(fmt_duration)
-        charge_tbl = summary.groupby(["Camera","Date"]).agg(Start=("Start","min"),End=("End","max"),Duration=("Duration_h","sum")).reset_index()
+        charge_tbl = sel.groupby(["Camera","Date"]).agg(Start=("Start","min"),End=("End","max"),Duration=("Duration_h","sum")).reset_index()
         charge_tbl["Duration"] = charge_tbl["Duration"].apply(fmt_duration)
-        st.dataframe(charge_tbl[["Camera","Date","Start","End","Duration"]])
+        charge_tbl.rename(columns={"Start":"Charge Start","End":"Charge End"}, inplace=True)
+        st.dataframe(charge_tbl[["Camera","Date","Charge Start","Charge End","Duration"]])
         download(charge_tbl,"ChargeSummary","charge")
 
+# Power
 with tab3:
     st.subheader("⚡ Power")
     sel = sessions[sessions["Event"].str.contains("Power")]
     if not sel.empty:
         fig = go.Figure()
-        used=set()
-        for _,r in sel.iterrows():
-            show = r["Event"] not in used
-            used.add(r["Event"])
+        for ev in ["Power On","Power Off"]:
+            ev_df = sel[sel["Event"]==ev]
             fig.add_trace(go.Bar(
-                x=[r["Start"]], y=[r["Duration_h"]*60],
-                marker_color=EVENT_COLORS[r["Event"]],
-                name=r["Event"] if show else None,
-                hovertext=f"{r['Camera']} | {r['Start']} → {r['End']} | {fmt_duration(r['Duration_h'])}"
+                x=ev_df["Start"], y=ev_df["Duration_h"]*60,
+                marker_color=EVENT_COLORS[ev],
+                name=ev,
+                hovertext=[f"{c} | {s} → {e} | {fmt_duration(d)}" for c,s,e,d in zip(ev_df["Camera"],ev_df["Start"],ev_df["End"],ev_df["Duration_h"])]
             ))
-        fig.update_layout(barmode="stack", yaxis_title="Minutes", xaxis_title="DateTime", template="plotly_dark")
+        fig.update_layout(barmode="stack", yaxis_title="Minutes", xaxis_title="DateTime", template="plotly_white")
         st.plotly_chart(fig,use_container_width=True,key="power")
         power_tbl = sel.copy()
         power_tbl["Duration"] = power_tbl["Duration_h"].apply(fmt_duration)
         st.dataframe(power_tbl[["Camera","Event","Start","End","Duration"]])
         download(power_tbl,"PowerSummary","power")
 
+# Recording
 with tab4:
     st.subheader("🎬 Recording / PreRecord")
     sel = sessions[sessions["Event"].str.contains("Record")]
     if not sel.empty:
         fig = go.Figure()
-        used=set()
-        for _,r in sel.iterrows():
-            show = r["Event"] not in used
-            used.add(r["Event"])
+        for ev in ["Start Record","Stop Record","Start PreRecord","Stop PreRecord"]:
+            ev_df = sel[sel["Event"]==ev]
             fig.add_trace(go.Bar(
-                x=[r["Start"]], y=[r["Duration_h"]*60],
-                marker_color=EVENT_COLORS[r["Event"]],
-                name=r["Event"] if show else None,
-                hovertext=f"{r['Camera']} | {r['Start']} → {r['End']} | {fmt_duration(r['Duration_h'])}"
+                x=ev_df["Start"], y=ev_df["Duration_h"]*60,
+                marker_color=EVENT_COLORS[ev],
+                name=ev,
+                hovertext=[f"{c} | {s} → {e} | {fmt_duration(d)}" for c,s,e,d in zip(ev_df["Camera"],ev_df["Start"],ev_df["End"],ev_df["Duration_h"])]
             ))
-        fig.update_layout(barmode="stack", yaxis_title="Minutes", xaxis_title="DateTime", template="plotly_dark")
+        fig.update_layout(barmode="stack", yaxis_title="Minutes", xaxis_title="DateTime", template="plotly_white")
         st.plotly_chart(fig,use_container_width=True,key="rec")
         rec_tbl = sel.copy()
         rec_tbl["Duration"] = rec_tbl["Duration_h"].apply(fmt_duration)
         st.dataframe(rec_tbl[["Camera","Event","Start","End","Duration"]])
         download(rec_tbl,"RecordingSummary","rec")
 
+# Daily
 with tab5:
     st.subheader("📑 Daily Summary")
     daily = sessions.groupby(["Camera","Date"]).apply(lambda g: pd.Series({
