@@ -6,10 +6,22 @@ from datetime import datetime
 import plotly.graph_objects as go
 from io import BytesIO
 
+# --- Streamlit Config ---
 st.set_page_config(page_title="Camera Log Dashboard", layout="wide")
-st.markdown("<h1 style='color:#00BFFF;'>📹 Camera Monitoring Dashboard</h1>", unsafe_allow_html=True)
+st.markdown("""
+    <style>
+    body { background-color: #121212; color: #E0E0E0; font-family: 'Segoe UI', sans-serif; }
+    h1, h2, h3 { color: #00BFFF; }
+    .stButton>button, .stDownloadButton>button {
+        background-color: #00BFFF; color: white; border-radius: 8px;
+        font-size: 13px; padding: 0.4em 1em;
+    }
+    .stDataFrame { background-color: #1E1E1E; }
+    </style>
+""", unsafe_allow_html=True)
+st.markdown("<h1>📹 Real-Time Camera Monitoring Dashboard</h1>", unsafe_allow_html=True)
 
-# ---- Config ----
+# --- Config ---
 EVENT_NORMALIZE = {
     "Battery Charging": "Start Charge",
     "Battery Charge Stop": "Stop Charge",
@@ -37,7 +49,7 @@ def human_event(raw):
             return EVENT_NORMALIZE[k]
     return raw.strip()
 
-# ---- Parsing ----
+# --- Parsing ---
 def parse_logs(files):
     pat = re.compile(
         r"(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+#ID:([0-9A-Za-z\-]+)\s+#(.*?)\s*(?:-.*Battery Level\s*-\s*(\d+)%\s*)?$"
@@ -89,7 +101,7 @@ def download(df,name,key):
     with pd.ExcelWriter(buf,engine="openpyxl") as w: df.to_excel(w,index=False,sheet_name=name[:31])
     st.download_button(f"⬇ {name} Excel", buf.getvalue(), f"{name}.xlsx", key=f"{name}_xls_{key}")
 
-# ---- UI ----
+# --- UI ---
 files = st.sidebar.file_uploader("📂 Upload logs", type=["txt","log"], accept_multiple_files=True)
 if not files: st.stop()
 df = parse_logs(files)
@@ -105,7 +117,7 @@ sel_cams = st.sidebar.multiselect("🎥 Cameras", cams, default=cams)
 sessions = sessions[sessions["Camera"].isin(sel_cams)]
 sessions = sessions[(sessions["Date"]>=start)&(sessions["Date"]<=end)]
 
-# ---- Tabs ----
+# --- Tabs ---
 tab1,tab2,tab3,tab4,tab5 = st.tabs(["Overview","Charging","Power","Recording","Daily Summary"])
 
 with tab1:
@@ -125,14 +137,15 @@ with tab2:
                 x=ev_df["Start"], y=ev_df["Duration_h"],
                 marker_color=EVENT_COLORS[ev],
                 name=ev,
-                hovertext=[f"{c} | {s} → {e} | {fmt_duration(d)}" for c,s,e,d in zip(ev_df["Camera"],ev_df["Start"],ev_df["End"],ev_df["Duration_h"])]
+                hovertext=[f"{c} | {s} → {e} | {fmt_duration(d)} | StartBat:{sb}% EndBat:{eb}%"
+                           for c,s,e,d,sb,eb in zip(ev_df["Camera"],ev_df["Start"],ev_df["End"],
+                                                     ev_df["Duration_h"],ev_df["StartBat"],ev_df["EndBat"])]
             ))
-        fig.update_layout(barmode="stack", yaxis_title="Hours", xaxis_title="DateTime", template="plotly_white")
+        fig.update_layout(barmode="stack", yaxis_title="Hours", xaxis_title="DateTime", template="plotly_dark")
         st.plotly_chart(fig, use_container_width=True, key="charge")
         charge_tbl = sel.groupby(["Camera","Date"]).agg(Start=("Start","min"),End=("End","max"),Duration=("Duration_h","sum")).reset_index()
         charge_tbl["Duration"] = charge_tbl["Duration"].apply(fmt_duration)
-        charge_tbl.rename(columns={"Start":"Charge Start","End":"Charge End"}, inplace=True)
-        st.dataframe(charge_tbl[["Camera","Date","Charge Start","Charge End","Duration"]])
+        st.dataframe(charge_tbl[["Camera","Date","Start","End","Duration"]])
         download(charge_tbl,"ChargeSummary","charge")
 
 # Power
@@ -147,9 +160,11 @@ with tab3:
                 x=ev_df["Start"], y=ev_df["Duration_h"]*60,
                 marker_color=EVENT_COLORS[ev],
                 name=ev,
-                hovertext=[f"{c} | {s} → {e} | {fmt_duration(d)}" for c,s,e,d in zip(ev_df["Camera"],ev_df["Start"],ev_df["End"],ev_df["Duration_h"])]
+                hovertext=[f"{c} | {s} → {e} | {fmt_duration(d)} | StartBat:{sb}% EndBat:{eb}%"
+                           for c,s,e,d,sb,eb in zip(ev_df["Camera"],ev_df["Start"],ev_df["End"],
+                                                     ev_df["Duration_h"],ev_df["StartBat"],ev_df["EndBat"])]
             ))
-        fig.update_layout(barmode="stack", yaxis_title="Minutes", xaxis_title="DateTime", template="plotly_white")
+        fig.update_layout(barmode="stack", yaxis_title="Minutes", xaxis_title="DateTime", template="plotly_dark")
         st.plotly_chart(fig,use_container_width=True,key="power")
         power_tbl = sel.copy()
         power_tbl["Duration"] = power_tbl["Duration_h"].apply(fmt_duration)
@@ -168,9 +183,11 @@ with tab4:
                 x=ev_df["Start"], y=ev_df["Duration_h"]*60,
                 marker_color=EVENT_COLORS[ev],
                 name=ev,
-                hovertext=[f"{c} | {s} → {e} | {fmt_duration(d)}" for c,s,e,d in zip(ev_df["Camera"],ev_df["Start"],ev_df["End"],ev_df["Duration_h"])]
+                hovertext=[f"{c} | {s} → {e} | {fmt_duration(d)} | StartBat:{sb}% EndBat:{eb}%"
+                           for c,s,e,d,sb,eb in zip(ev_df["Camera"],ev_df["Start"],ev_df["End"],
+                                                     ev_df["Duration_h"],ev_df["StartBat"],ev_df["EndBat"])]
             ))
-        fig.update_layout(barmode="stack", yaxis_title="Minutes", xaxis_title="DateTime", template="plotly_white")
+        fig.update_layout(barmode="stack", yaxis_title="Minutes", xaxis_title="DateTime", template="plotly_dark")
         st.plotly_chart(fig,use_container_width=True,key="rec")
         rec_tbl = sel.copy()
         rec_tbl["Duration"] = rec_tbl["Duration_h"].apply(fmt_duration)
