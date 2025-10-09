@@ -5,7 +5,7 @@ from io import BytesIO
 from datetime import datetime, timedelta
 
 # ----------------------- PAGE SETTINGS -----------------------
-st.set_page_config(page_title="Camera Monitoring Dashboard", layout="wide")
+st.set_page_config(page_title="🎥 Real Monitoring Dashboard", layout="wide")
 
 st.markdown("""
     <style>
@@ -28,18 +28,21 @@ def parse_logs(files):
     rows = []
     for file in files:
         for line in file:
-            line = line.decode("utf-8").strip()
-            parts = line.split("#")
-            if len(parts) < 4:
+            line = line.decode("utf-8", errors="ignore").strip()
+            if not line:
                 continue
             try:
-                ts = parts[0].strip()
-                cam_id = parts[1].split(":")[1].strip().split("-")[0]
+                parts = line.split("#")
+                if len(parts) < 3:
+                    continue
+                ts_str = parts[0].strip().split(" ")[0] + " " + parts[0].strip().split(" ")[-1]
+                ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+                cam_id = parts[1].split(":")[1].split("-")[0].strip()
                 event = parts[2].strip()
-                bat = [p for p in parts if "Battery Level" in p]
-                battery = int(bat[0].split("-")[-1].replace("%", "").strip()) if bat else None
-                ts_obj = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
-                rows.append({"timestamp": ts_obj, "camera": cam_id, "event": event, "battery": battery})
+                battery = None
+                if "Battery Level" in line:
+                    battery = int(line.split("Battery Level -")[-1].replace("%", "").strip())
+                rows.append({"timestamp": ts, "camera": cam_id, "event": event, "battery": battery})
             except Exception:
                 continue
     return pd.DataFrame(rows)
@@ -67,29 +70,29 @@ def download_button(df, label):
     buffer = BytesIO()
     df.to_excel(buffer, index=False)
     buffer.seek(0)
-    st.download_button(f"📥 Download {label}", buffer, f"{label}.xlsx")
+    st.download_button(f"📥 {label}", buffer, f"{label}.xlsx", use_container_width=False)
 
-# ----------------------- CHARGE EVENTS -----------------------
-charge_events = []
+# ----------------------- CHARGING EVENTS -----------------------
 charge_pairs = []
 for cam, group in df.groupby("camera"):
     start, end, start_bat, end_bat = None, None, None, None
     for _, row in group.iterrows():
-        if "Charging" in row["event"] and "Start" in row["event"]:
-            start = row["timestamp"]
-            start_bat = row["battery"]
-        elif "Charging" in row["event"] and "Stop" in row["event"] and start:
-            end = row["timestamp"]
-            end_bat = row["battery"]
-            charge_pairs.append({
-                "Camera": cam,
-                "Start": start,
-                "End": end,
-                "Start Battery": start_bat,
-                "End Battery": end_bat,
-                "Duration": calc_duration(start, end)
-            })
-            start = None
+        if "Charging" in row["event"] and "Enter" not in row["event"]:
+            if start is None:
+                start = row["timestamp"]
+                start_bat = row["battery"]
+            else:
+                end = row["timestamp"]
+                end_bat = row["battery"]
+                charge_pairs.append({
+                    "Camera": cam,
+                    "Start": start,
+                    "End": end,
+                    "Start Battery": start_bat,
+                    "End Battery": end_bat,
+                    "Duration": calc_duration(start, end)
+                })
+                start = None
 
 charge_df = pd.DataFrame(charge_pairs)
 
@@ -151,14 +154,13 @@ with tab1:
                 x=[row["Start"], row["End"]],
                 y=[row["Camera"]]*2,
                 orientation='h',
-                name="Charging",
-                marker=dict(color="green", pattern_shape="/"),
-                hovertext=f"Start: {row['Start']}<br>End: {row['End']}<br>Battery: {row['Start Battery']}%-{row['End Battery']}%<br>Duration: {row['Duration']}"
+                marker=dict(color="lightgreen", line=dict(color="green", width=2)),
+                hovertext=f"<b>Start:</b> {row['Start']}<br><b>End:</b> {row['End']}<br><b>Battery:</b> {row['Start Battery']}%-{row['End Battery']}%<br><b>Duration:</b> {row['Duration']}"
             ))
         fig.update_layout(title="Charging Sessions", xaxis_title="Time", yaxis_title="Camera", showlegend=False)
         st.plotly_chart(fig, use_container_width=True)
         st.dataframe(charge_df[["Camera", "Start", "End", "Duration"]])
-        download_button(charge_df, "Charging Report")
+        download_button(charge_df, "Charging_Report")
 
 with tab2:
     st.subheader("🔌 Power On/Off Overview")
@@ -169,17 +171,16 @@ with tab2:
                 x=[row["Start"], row["End"]],
                 y=[row["Camera"]]*2,
                 orientation='h',
-                name="Power",
-                marker=dict(color="orange"),
-                hovertext=f"On: {row['Start']}<br>Off: {row['End']}<br>Battery: {row['Start Battery']}%-{row['End Battery']}%<br>Duration: {row['Duration']}"
+                marker=dict(color="orange", line=dict(color="darkorange", width=2)),
+                hovertext=f"<b>On:</b> {row['Start']}<br><b>Off:</b> {row['End']}<br><b>Battery:</b> {row['Start Battery']}%-{row['End Battery']}%<br><b>Duration:</b> {row['Duration']}"
             ))
         fig.update_layout(title="Power Activity", xaxis_title="Time", yaxis_title="Camera", showlegend=False)
         st.plotly_chart(fig, use_container_width=True)
         st.dataframe(power_df[["Camera", "Start", "End", "Duration"]])
-        download_button(power_df, "Power Report")
+        download_button(power_df, "Power_Report")
 
 with tab3:
-    st.subheader("🎥 Recording Activity")
+    st.subheader("🎥 Recording Overview")
     if not record_df.empty:
         fig = go.Figure()
         for _, row in record_df.iterrows():
@@ -187,33 +188,32 @@ with tab3:
                 x=[row["Start"], row["End"]],
                 y=[row["Camera"]]*2,
                 orientation='h',
-                name="Recording",
-                marker=dict(color="lightgreen"),
-                hovertext=f"Start: {row['Start']}<br>End: {row['End']}<br>Battery: {row['Start Battery']}%-{row['End Battery']}%<br>Duration: {row['Duration']}"
+                marker=dict(color="lightblue", line=dict(color="blue", width=2)),
+                hovertext=f"<b>Start:</b> {row['Start']}<br><b>End:</b> {row['End']}<br><b>Battery:</b> {row['Start Battery']}%-{row['End Battery']}%<br><b>Duration:</b> {row['Duration']}"
             ))
         fig.update_layout(title="Recording Sessions", xaxis_title="Time", yaxis_title="Camera", showlegend=False)
         st.plotly_chart(fig, use_container_width=True)
         st.dataframe(record_df[["Camera", "Start", "End", "Duration"]])
-        download_button(record_df, "Recording Report")
+        download_button(record_df, "Recording_Report")
 
 with tab4:
     st.subheader("📊 Daily Summary")
-    all_summary = []
+    summary = []
     for cam, group in df.groupby("camera"):
-        total_charge = charge_df[charge_df["Camera"] == cam]["Duration"].count()
         avg_bat = group["battery"].dropna().mean()
-        all_summary.append({
+        total_chg = charge_df[charge_df["Camera"] == cam].shape[0]
+        summary.append({
             "Camera": cam,
-            "Total Charging Sessions": total_charge,
+            "Total Charging Sessions": total_chg,
             "Average Battery %": round(avg_bat, 1)
         })
-    summary_df = pd.DataFrame(all_summary)
+    summary_df = pd.DataFrame(summary)
     st.dataframe(summary_df)
-    download_button(summary_df, "Daily Summary")
+    download_button(summary_df, "Daily_Summary")
     for _, row in summary_df.iterrows():
         if row["Average Battery %"] > 90:
-            st.success(f"Camera {row['Camera']} battery is healthy.")
+            st.success(f"Camera {row['Camera']} battery is healthy and performs well.")
         elif row["Average Battery %"] > 70:
-            st.warning(f"Camera {row['Camera']} battery moderate.")
+            st.warning(f"Camera {row['Camera']} battery moderate, monitor usage.")
         else:
-            st.error(f"Camera {row['Camera']} battery low, please inspect.")
+            st.error(f"Camera {row['Camera']} battery low, consider replacement.")
