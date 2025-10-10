@@ -2,218 +2,179 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from io import BytesIO
-from datetime import datetime, timedelta
+from datetime import datetime
 
-# ----------------------- PAGE SETTINGS -----------------------
 st.set_page_config(page_title="🎥 Real Monitoring Dashboard", layout="wide")
 
 st.markdown("""
-    <style>
-    body { background-color: #f7faff; color: #1a1a1a; font-family: 'Segoe UI'; }
-    .stButton>button { background-color: #0078D4; color: white; border-radius: 8px; font-weight: 600; }
-    .stTabs [data-baseweb="tab-list"] { background-color: #eaf2fb; border-radius: 10px; }
-    .stTabs [data-baseweb="tab"] { color: #004578; font-weight: 600; }
-    .stDataFrame { border: 1px solid #c7d5e0; }
-    </style>
+<style>
+body {background-color:#f9fbfd; color:#1a1a1a; font-family:'Segoe UI';}
+.stButton>button {background-color:#0078D4; color:white; border-radius:6px; font-weight:600;}
+.stTabs [data-baseweb="tab-list"] {background-color:#eef3fa; border-radius:10px;}
+.stTabs [data-baseweb="tab"] {color:#004578; font-weight:600;}
+table {font-size:14px;}
+</style>
 """, unsafe_allow_html=True)
 
-# ----------------------- FILE UPLOAD -----------------------
 st.title("🎥 Real Monitoring Dashboard")
+
+# ---------- File upload ----------
 files = st.file_uploader("Upload Log Files", type=["txt", "log"], accept_multiple_files=True)
 if not files:
     st.stop()
 
-# ----------------------- PARSE LOGS -----------------------
+# ---------- Parse logs ----------
 def parse_logs(files):
-    rows = []
+    data = []
     for file in files:
         for line in file:
             line = line.decode("utf-8", errors="ignore").strip()
-            if not line:
+            if not line or "#" not in line:
                 continue
             try:
-                parts = line.split("#")
-                if len(parts) < 3:
-                    continue
-                ts_str = parts[0].strip().split(" ")[0] + " " + parts[0].strip().split(" ")[-1]
-                ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
-                cam_id = parts[1].split(":")[1].split("-")[0].strip()
-                event = parts[2].strip()
+                ts_str = line.split("#")[0].strip()
+                dt = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+                cam_id = line.split("#ID:")[1].split("-")[0]
+                event = line.split("#")[-1].strip()
                 battery = None
                 if "Battery Level" in line:
                     battery = int(line.split("Battery Level -")[-1].replace("%", "").strip())
-                rows.append({"timestamp": ts, "camera": cam_id, "event": event, "battery": battery})
+                data.append({"timestamp": dt, "camera": cam_id, "event": event, "battery": battery})
             except Exception:
                 continue
-    return pd.DataFrame(rows)
+    return pd.DataFrame(data)
 
 df = parse_logs(files)
 if df.empty:
     st.error("No valid entries found.")
     st.stop()
 
-# ----------------------- CAMERA SELECTION -----------------------
-selected_camera = st.selectbox("Select Camera", sorted(df["camera"].unique()))
-df = df[df["camera"] == selected_camera]
+# ---------- Camera filter ----------
+cam = st.selectbox("Select Camera", sorted(df["camera"].unique()))
+df = df[df["camera"] == cam].sort_values("timestamp")
 
-# ----------------------- HELPER FUNCTIONS -----------------------
-def calc_duration(start, end):
-    delta = (end - start).total_seconds() / 60
-    if delta < 60:
-        return f"{int(delta)} min"
+# ---------- Helper ----------
+def get_duration(start, end):
+    diff = (end - start).total_seconds()
+    if diff < 60:
+        return f"{int(diff)} sec"
+    elif diff < 3600:
+        return f"{int(diff//60)} min"
     else:
-        h = int(delta // 60)
-        m = int(delta % 60)
+        h, m = divmod(int(diff//60), 60)
         return f"{h}h {m}m"
 
-def download_button(df, label):
-    buffer = BytesIO()
-    df.to_excel(buffer, index=False)
-    buffer.seek(0)
-    st.download_button(f"📥 {label}", buffer, f"{label}.xlsx", use_container_width=False)
+def export_btn(df, name):
+    buf = BytesIO()
+    df.to_excel(buf, index=False)
+    buf.seek(0)
+    st.download_button(f"📥 Download {name}", buf, f"{name}.xlsx", use_container_width=False)
 
-# ----------------------- CHARGING EVENTS -----------------------
-charge_pairs = []
-for cam, group in df.groupby("camera"):
-    start, end, start_bat, end_bat = None, None, None, None
-    for _, row in group.iterrows():
-        if "Charging" in row["event"] and "Enter" not in row["event"]:
-            if start is None:
-                start = row["timestamp"]
-                start_bat = row["battery"]
-            else:
-                end = row["timestamp"]
-                end_bat = row["battery"]
-                charge_pairs.append({
-                    "Camera": cam,
-                    "Start": start,
-                    "End": end,
-                    "Start Battery": start_bat,
-                    "End Battery": end_bat,
-                    "Duration": calc_duration(start, end)
-                })
-                start = None
-
-charge_df = pd.DataFrame(charge_pairs)
-
-# ----------------------- POWER EVENTS -----------------------
-power_pairs = []
-for cam, group in df.groupby("camera"):
-    start, end, start_bat, end_bat = None, None, None, None
-    for _, row in group.iterrows():
-        if "Power On" in row["event"]:
-            start = row["timestamp"]
-            start_bat = row["battery"]
-        elif "Power Off" in row["event"] and start:
-            end = row["timestamp"]
-            end_bat = row["battery"]
-            power_pairs.append({
-                "Camera": cam,
-                "Start": start,
-                "End": end,
-                "Start Battery": start_bat,
-                "End Battery": end_bat,
-                "Duration": calc_duration(start, end)
-            })
-            start = None
-
-power_df = pd.DataFrame(power_pairs)
-
-# ----------------------- RECORDING EVENTS -----------------------
-record_pairs = []
-for cam, group in df.groupby("camera"):
-    start, end, start_bat, end_bat = None, None, None, None
-    for _, row in group.iterrows():
-        if "Start Recording" in row["event"]:
-            start = row["timestamp"]
-            start_bat = row["battery"]
-        elif "Stop Recording" in row["event"] and start:
-            end = row["timestamp"]
-            end_bat = row["battery"]
-            record_pairs.append({
-                "Camera": cam,
-                "Start": start,
-                "End": end,
-                "Start Battery": start_bat,
-                "End Battery": end_bat,
-                "Duration": calc_duration(start, end)
-            })
-            start = None
-
-record_df = pd.DataFrame(record_pairs)
-
-# ----------------------- PLOTS -----------------------
-tab1, tab2, tab3, tab4 = st.tabs(["⚡ Charging", "🔌 Power", "🎥 Recording", "📊 Summary"])
-
-with tab1:
-    st.subheader("⚡ Charging Overview")
-    if not charge_df.empty:
-        fig = go.Figure()
-        for _, row in charge_df.iterrows():
-            fig.add_trace(go.Bar(
-                x=[row["Start"], row["End"]],
-                y=[row["Camera"]]*2,
-                orientation='h',
-                marker=dict(color="lightgreen", line=dict(color="green", width=2)),
-                hovertext=f"<b>Start:</b> {row['Start']}<br><b>End:</b> {row['End']}<br><b>Battery:</b> {row['Start Battery']}%-{row['End Battery']}%<br><b>Duration:</b> {row['Duration']}"
-            ))
-        fig.update_layout(title="Charging Sessions", xaxis_title="Time", yaxis_title="Camera", showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(charge_df[["Camera", "Start", "End", "Duration"]])
-        download_button(charge_df, "Charging_Report")
-
-with tab2:
-    st.subheader("🔌 Power On/Off Overview")
-    if not power_df.empty:
-        fig = go.Figure()
-        for _, row in power_df.iterrows():
-            fig.add_trace(go.Bar(
-                x=[row["Start"], row["End"]],
-                y=[row["Camera"]]*2,
-                orientation='h',
-                marker=dict(color="orange", line=dict(color="darkorange", width=2)),
-                hovertext=f"<b>On:</b> {row['Start']}<br><b>Off:</b> {row['End']}<br><b>Battery:</b> {row['Start Battery']}%-{row['End Battery']}%<br><b>Duration:</b> {row['Duration']}"
-            ))
-        fig.update_layout(title="Power Activity", xaxis_title="Time", yaxis_title="Camera", showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(power_df[["Camera", "Start", "End", "Duration"]])
-        download_button(power_df, "Power_Report")
-
-with tab3:
-    st.subheader("🎥 Recording Overview")
-    if not record_df.empty:
-        fig = go.Figure()
-        for _, row in record_df.iterrows():
-            fig.add_trace(go.Bar(
-                x=[row["Start"], row["End"]],
-                y=[row["Camera"]]*2,
-                orientation='h',
-                marker=dict(color="lightblue", line=dict(color="blue", width=2)),
-                hovertext=f"<b>Start:</b> {row['Start']}<br><b>End:</b> {row['End']}<br><b>Battery:</b> {row['Start Battery']}%-{row['End Battery']}%<br><b>Duration:</b> {row['Duration']}"
-            ))
-        fig.update_layout(title="Recording Sessions", xaxis_title="Time", yaxis_title="Camera", showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(record_df[["Camera", "Start", "End", "Duration"]])
-        download_button(record_df, "Recording_Report")
-
-with tab4:
-    st.subheader("📊 Daily Summary")
-    summary = []
-    for cam, group in df.groupby("camera"):
-        avg_bat = group["battery"].dropna().mean()
-        total_chg = charge_df[charge_df["Camera"] == cam].shape[0]
-        summary.append({
+# ---------- CHARGING ----------
+charge_sessions = []
+charge_start = None
+for _, row in df.iterrows():
+    if "Battery Charging" in row["event"] and not charge_start:
+        charge_start = row
+    elif "Battery Charging" not in row["event"] and charge_start:
+        charge_sessions.append({
             "Camera": cam,
-            "Total Charging Sessions": total_chg,
-            "Average Battery %": round(avg_bat, 1)
+            "Start": charge_start["timestamp"],
+            "End": row["timestamp"],
+            "Start Battery": charge_start["battery"],
+            "End Battery": row["battery"],
+            "Duration": get_duration(charge_start["timestamp"], row["timestamp"])
         })
-    summary_df = pd.DataFrame(summary)
-    st.dataframe(summary_df)
-    download_button(summary_df, "Daily_Summary")
-    for _, row in summary_df.iterrows():
-        if row["Average Battery %"] > 90:
-            st.success(f"Camera {row['Camera']} battery is healthy and performs well.")
-        elif row["Average Battery %"] > 70:
-            st.warning(f"Camera {row['Camera']} battery moderate, monitor usage.")
-        else:
-            st.error(f"Camera {row['Camera']} battery low, consider replacement.")
+        charge_start = None
+
+tab1, tab2, tab3 = st.tabs(["⚡ Charging", "🔌 Power On/Off", "🎥 Recording"])
+
+# ---------- CHARGING GRAPH ----------
+with tab1:
+    st.subheader("⚡ Charging Sessions")
+    if charge_sessions:
+        chg = pd.DataFrame(charge_sessions)
+        fig = go.Figure()
+        for _, r in chg.iterrows():
+            fig.add_trace(go.Bar(
+                x=[(r["End"] - r["Start"]).seconds / 3600],
+                y=[r["Start"].strftime("%Y-%m-%d %H:%M")],
+                orientation='h',
+                name="Charge",
+                marker=dict(color="lightgreen", line=dict(color="green", width=2)),
+                hovertemplate=(
+                    f"<b>Start:</b> {r['Start']}<br>"
+                    f"<b>End:</b> {r['End']}<br>"
+                    f"<b>Battery:</b> {r['Start Battery']}%-{r['End Battery']}%<br>"
+                    f"<b>Duration:</b> {r['Duration']}"
+                )
+            ))
+        fig.update_layout(xaxis_title="Charging Hours", yaxis_title="Session Start Time",
+                          template="plotly_white", showlegend=False)
+        st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(chg[["Camera", "Start", "End", "Start Battery", "End Battery", "Duration"]])
+        export_btn(chg, "Charging_Summary")
+    else:
+        st.info("No charging sessions found.")
+
+# ---------- POWER GRAPH ----------
+with tab2:
+    st.subheader("🔌 Power On/Off Events")
+    power_on = df[df["event"].str.contains("Power On", case=False, na=False)]
+    power_off = df[df["event"].str.contains("Power Off", case=False, na=False)]
+    if not power_on.empty or not power_off.empty:
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=power_on["timestamp"], y=[1]*len(power_on),
+            mode="markers", marker=dict(color="green", size=10),
+            name="Power On",
+            hovertemplate="<b>Power On:</b> %{x}<br><b>Battery:</b> %{customdata}%",
+            customdata=power_on["battery"]
+        ))
+        fig.add_trace(go.Scatter(
+            x=power_off["timestamp"], y=[0]*len(power_off),
+            mode="markers", marker=dict(color="red", size=10, symbol="x"),
+            name="Power Off",
+            hovertemplate="<b>Power Off:</b> %{x}<br><b>Battery:</b> %{customdata}%",
+            customdata=power_off["battery"]
+        ))
+        fig.update_layout(template="plotly_white", xaxis_title="Time", yaxis_title="Status",
+                          yaxis=dict(tickvals=[0,1], ticktext=["Off","On"]),
+                          showlegend=True)
+        st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(pd.concat([power_on[["timestamp","battery"]].rename(columns={"timestamp":"Power On"}), 
+                                power_off[["timestamp","battery"]].rename(columns={"timestamp":"Power Off"})], axis=1))
+        export_btn(power_on, "Power_Events")
+    else:
+        st.info("No Power On/Off events found.")
+
+# ---------- RECORDING GRAPH ----------
+with tab3:
+    st.subheader("🎥 Recording Events")
+    rec_on = df[df["event"].str.contains("Start Record", case=False, na=False)]
+    rec_off = df[df["event"].str.contains("Stop Record", case=False, na=False)]
+    if not rec_on.empty or not rec_off.empty:
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=rec_on["timestamp"], y=[1]*len(rec_on),
+            mode="markers", marker=dict(color="blue", size=10),
+            name="Start Record",
+            hovertemplate="<b>Start:</b> %{x}<br><b>Battery:</b> %{customdata}%",
+            customdata=rec_on["battery"]
+        ))
+        fig.add_trace(go.Scatter(
+            x=rec_off["timestamp"], y=[0]*len(rec_off),
+            mode="markers", marker=dict(color="darkred", size=10, symbol="x"),
+            name="Stop Record",
+            hovertemplate="<b>Stop:</b> %{x}<br><b>Battery:</b> %{customdata}%",
+            customdata=rec_off["battery"]
+        ))
+        fig.update_layout(template="plotly_white", xaxis_title="Time", yaxis_title="Status",
+                          yaxis=dict(tickvals=[0,1], ticktext=["Stopped","Recording"]),
+                          showlegend=True)
+        st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(pd.concat([rec_on[["timestamp","battery"]].rename(columns={"timestamp":"Start Record"}), 
+                                rec_off[["timestamp","battery"]].rename(columns={"timestamp":"Stop Record"})], axis=1))
+        export_btn(rec_on, "Recording_Events")
+    else:
+        st.info("No Recording events found.")
